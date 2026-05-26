@@ -548,3 +548,136 @@ def dict_depth(d):
     if isinstance(d, dict) or isinstance(d, DictConfig):
         return 1 + (max(map(dict_depth, d.values())) if d else 0)
     return 0
+
+
+_MESH_EXTS = {".obj", ".ply", ".glb", ".gltf", ".stl", ".fbx"}
+
+
+def _mesh_to_trimesh(m):
+    import trimesh
+    import numpy as np
+    vertices = m.verts.numpy()
+    faces = m.faces.numpy()
+    visual = None
+    if m.vert_colors is not None:
+        vc = (m.vert_colors.numpy() * 255).clip(0, 255).astype(np.uint8)
+        visual = trimesh.visual.ColorVisuals(vertex_colors=vc)
+    elif m.texture is not None and m.verts_uvs is not None:
+        from PIL import Image
+        tex_np = (m.texture.permute(1, 2, 0).numpy() * 255).clip(0, 255).astype(np.uint8)
+        pil_img = Image.fromarray(tex_np)
+        uv = m.verts_uvs.numpy().copy()
+        uv[:, 1] = 1.0 - uv[:, 1]  # flip y back to trimesh UV convention
+        visual = trimesh.visual.TextureVisuals(uv=uv, image=pil_img)
+    return trimesh.Trimesh(vertices=vertices, faces=faces, visual=visual, process=False)
+
+
+def _pil_to_tensor(image):
+    import torch
+    import numpy as np
+    arr = np.array(image).astype(np.float32) / 255.0
+    if arr.ndim == 2:
+        arr = np.stack([arr, arr, arr], axis=-1)
+    return torch.from_numpy(arr[:, :, :3]).permute(2, 0, 1)
+
+
+def _load_trimesh_texture(m):
+    mat = getattr(m.visual, "material", None)
+    if mat is None:
+        return None
+    if hasattr(mat, "image") and mat.image is not None:
+        return _pil_to_tensor(mat.image)
+    if hasattr(mat, "baseColorTexture") and mat.baseColorTexture is not None:
+        return _pil_to_tensor(mat.baseColorTexture)
+    return _flat_color_texture(m)
+
+
+def _flat_color_texture(m):
+    import torch
+    import numpy as np
+    mat = getattr(getattr(m, "visual", None), "material", None)
+    if mat is None:
+        return None
+    if hasattr(mat, "main_color") and mat.main_color is not None:
+        c = torch.from_numpy(mat.main_color[:3] / 255.0).float()
+        return (c[:, None, None] * torch.ones(3, 500, 500))
+    return None
+
+
+def _load_mesh(entry: Path):
+    from od3d_basic.data.modalities import Mesh
+    mesh_file = None
+    if entry.is_file() and entry.suffix.lower() in _MESH_EXTS:
+        mesh_file = entry
+    elif entry.is_dir():
+        for ext in (".obj", ".ply", ".glb", ".gltf", ".stl", ".fbx"):
+            candidates = sorted(entry.glob(f"*{ext}"))
+            if candidates:
+                mesh_file = candidates[0]
+                break
+    if mesh_file is None:
+        return None, None
+    try:
+        import torch
+        import trimesh
+        import numpy as np
+
+        # Load without force="mesh" to preserve UV/texture visuals; handle Scene
+        loaded = trimesh.load(mesh_file)
+        if isinstance(loaded, trimesh.Scene):
+            geoms = list(loaded.geometry.values())
+            m = geoms[0] if geoms else None
+        else:
+            m = loaded
+        if m is None or not isinstance(m, trimesh.Trimesh):
+            return None, None
+
+        verts = torch.tensor(m.vertices, dtype=torch.float32)  # (V, 3)
+        faces = torch.tensor(m.faces, dtype=torch.int64)       # (F, 3)
+
+        # center and normalize to unit bounding box
+        v_min = verts.min(dim=0).values
+        v_max = verts.max(dim=0).values
+        center = (v_min + v_max) * 0.5
+        scale  = (v_max - v_min).max().clamp(min=1e-8).item()
+        verts  = (verts - center) / scale
+
+        # tform4x4: maps normalized → original  (original = scale * normalized + center)
+        tform = torch.eye(4, dtype=torch.float32)
+        tform[:3, :3] = torch.eye(3) * scale
+        tform[:3,  3] = center
+
+        vert_colors = None
+        verts_uvs   = None
+        faces_uvs   = None
+        texture     = None
+
+        # Check UV/texture first — TextureVisuals also exposes vertex_colors (baked,
+        # often black), so the UV branch must take priority.
+        if isinstance(m.visual, trimesh.visual.TextureVisuals):
+            uv = m.visual.uv
+            if uv is not None:
+                verts_uvs = torch.from_numpy(np.array(uv, dtype=np.float32))
+                verts_uvs[:, 1] = 1.0 - verts_uvs[:, 1]  # flip y to image convention
+                faces_uvs = faces.clone()
+                texture = _load_trimesh_texture(m)
+            else:
+                texture = _flat_color_texture(m)
+                if texture is not None:
+                    verts_uvs = 0.5 * torch.ones((verts.shape[0], 2), dtype=torch.float32)
+                    faces_uvs = faces.clone()
+        elif isinstance(m.visual, trimesh.visual.ColorVisuals):
+            vc = m.visual.vertex_colors
+            if vc is not None:
+                vert_colors = torch.from_numpy(
+                    np.array(vc, dtype=np.float32)[:, :3] / 255.0
+                )
+
+        return (
+            Mesh(verts=verts, faces=faces,
+                 vert_colors=vert_colors,
+                 verts_uvs=verts_uvs, faces_uvs=faces_uvs, texture=texture),
+            tform,
+        )
+    except Exception:
+        return None, None

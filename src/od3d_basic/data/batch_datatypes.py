@@ -1,28 +1,15 @@
-import logging
-
-logger = logging.getLogger(__name__)
-import torch
+from __future__ import annotations
 from dataclasses import dataclass
-from typing import List, Union
+from typing import Optional
+from torch import Tensor
 
 
 @dataclass
 class OD3D_ModelData:
-    latent: torch.Tensor = None  # BxF
-    latent_mu: torch.Tensor = None  # BxF
-    latent_logvar: torch.Tensor = None  # BxF
-    feat: torch.Tensor = None  # BxF
-    feat_mu: torch.Tensor = None  # BxF
-    feat_logvar: torch.Tensor = None  # BxF
-    feats: torch.Tensor = None  # BxNxF
-    pts3d: torch.Tensor = None  # BxNx3
-    featmap: torch.Tensor = None  # BxCxHxW
-    featmap_mu: torch.Tensor = None  # BxCxHxW
-    featmap_logvar: torch.Tensor = None  # BxCxHxW
-    featmaps: Union[
-        List[torch.Tensor],
-        torch.Tensor,
-    ] = None  # List(BxCxHixWi) or BxNxCxHxW
-    mask: torch.Tensor = None  # Bx1xHxW
-    masks: Union[List[torch.Tensor], torch.Tensor] = None  # List(Bx1xHixWi) or BxNxHxW
-    masks_scores: torch.Tensor = None  # BxN
+    """Container for neural-network output tensors."""
+    feat:          Optional[Tensor] = None  # (B, F)
+    feats:         Optional[Tensor] = None  # (B, N, F)
+    featmap:       Optional[Tensor] = None  # (B, F, H, W)
+    latent:        Optional[Tensor] = None
+    latent_mu:     Optional[Tensor] = None
+    latent_logvar: Optional[Tensor] = None

@@ -6,7 +6,18 @@ build-backend = "setuptools.build_meta"
 name = "od3d-basic"
 version = "0.1.0"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+    "gdown",
+    "hydra-core",
+    "omegaconf",
+    "opencv-python",
+    "torchvision",
+    "open3d",
+]
+
+[project.optional-dependencies]
+pyrender = ["pyrender2"]
+nvdiffrast = ["nvdiffrast @ git+https://github.com/NVlabs/nvdiffrast.git"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

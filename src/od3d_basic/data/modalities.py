@@ -184,6 +184,7 @@ class FrameObjectBatchModalities:
     obj_kpts3d:         Optional[Tensor]       = None  # (B, K, 3)
     obj_kpts3d_mask:    Optional[Tensor]       = None  # (B, K)    bool
     category:           Optional[Tensor]       = None  # (B,)  int64
+    mesh:               Optional[Mesh]         = None  # shared mesh for all B viewpoints
 
 
 @dataclass
