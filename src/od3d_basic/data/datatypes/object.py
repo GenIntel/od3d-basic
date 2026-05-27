@@ -7,6 +7,32 @@ from od3d_basic.data.datatypes.mesh import Mesh
 from od3d_basic.data.datatypes.frame import _stack_field
 
 
+def _draw_kpts2d_on_imgs(
+    imgs: "Tensor",           # (B, 3, H, W) float32 [0,1]
+    kpts2d: "Tensor",         # (B, K, 2) float32  [u, v] pixel coords
+    mask: "Optional[Tensor]", # (K,) bool or None
+    radius: int = 5,
+) -> "Tensor":
+    """Draw HSV-coloured filled circles at keypoint locations in-place (cloned copy)."""
+    import colorsys
+    B, _, H, W = imgs.shape
+    K = kpts2d.shape[1]
+    result = imgs.clone()
+    ys = torch.arange(H, dtype=torch.float32, device=imgs.device)
+    xs = torch.arange(W, dtype=torch.float32, device=imgs.device)
+    yy, xx = torch.meshgrid(ys, xs, indexing="ij")  # (H, W)
+    for k in range(K):
+        if mask is not None and not mask[k]:
+            continue
+        r, g, b = colorsys.hsv_to_rgb(k / max(K, 1), 0.9, 0.88)
+        color = torch.tensor([r, g, b], dtype=torch.float32, device=imgs.device)
+        for b_i in range(B):
+            u, v = kpts2d[b_i, k, 0], kpts2d[b_i, k, 1]
+            circle = (xx - u) ** 2 + (yy - v) ** 2 <= radius ** 2  # (H, W)
+            result[b_i, :, circle] = color[:, None]
+    return result
+
+
 def _render_mesh_trimesh(mesh: "Mesh", n_views: int = 6, H: int = 256, W: int = 256) -> "Tensor":
     """Render mesh from n_views azimuth angles using trimesh's offscreen backend."""
     import math
@@ -59,6 +85,49 @@ class Object:
     category_id:             Optional[int]    = None
     attributes:              Optional[dict]   = None
 
+    def render_modalities(
+        self,
+        renderer: str = "pyrender",
+        n_views: int = 4,
+        H: int = 256,
+        W: int = 256,
+    ) -> "Optional[dict]":
+        """Return dict of rendered modalities {'rgb','depth','normals'}, each (N,3,H,W)."""
+        if self.mesh is None:
+            return None
+        from od3d_basic.data.viz import sample_uniform_viewpoints, render_mesh_from_viewpoints
+        from od3d_basic.cv.visual.show import get_default_camera_intrinsics_from_img_size
+
+        batch = sample_uniform_viewpoints(n_views, mesh=self.mesh)
+        modalities = render_mesh_from_viewpoints(batch, H=H, W=W, renderer=renderer)
+
+        if self.obj_kpts3d is not None:
+            cam_tform4x4_obj = batch.cam_tform4x4_obj  # (B, 4, 4)
+            B = cam_tform4x4_obj.shape[0]
+            cam_intr4x4 = batch.cam_intr4x4
+            if cam_intr4x4 is None:
+                cam_intr4x4 = get_default_camera_intrinsics_from_img_size(W, H).unsqueeze(0).expand(B, -1, -1)
+            elif cam_intr4x4.dim() == 2:
+                cam_intr4x4 = cam_intr4x4.unsqueeze(0).expand(B, -1, -1)
+
+            kpts3d = self.obj_kpts3d.float()       # (K, 3)
+            K = kpts3d.shape[0]
+            kpts3d_h = torch.cat([kpts3d, torch.ones(K, 1)], dim=1)  # (K, 4)
+            kpts_cam = (cam_tform4x4_obj @ kpts3d_h.T).permute(0, 2, 1)  # (B, K, 4)
+            kpts_xyz = kpts_cam[..., :3]                                   # (B, K, 3)
+            kpts_proj = torch.bmm(cam_intr4x4[:, :3, :3],
+                                  kpts_xyz.permute(0, 2, 1)).permute(0, 2, 1)  # (B, K, 3)
+            z = kpts_proj[..., 2:3].clamp(min=1e-6)
+            kpts2d = kpts_proj[..., :2] / z  # (B, K, 2)  [u, v]
+
+            modalities["rgb"] = _draw_kpts2d_on_imgs(
+                modalities["rgb"], kpts2d,
+                mask=self.obj_kpts3d_mask,
+                radius=max(H, W) // 50,
+            )
+
+        return modalities
+
     def viz(
         self,
         renderer: str = "pyrender",
@@ -89,9 +158,7 @@ class Object:
             if renderer == "trimesh":
                 imgs = _render_mesh_trimesh(self.mesh, n_views=n_views, H=H, W=W)
             else:
-                from od3d_basic.cv.visual.viz import sample_uniform_viewpoints, render_mesh_from_viewpoints
-                batch = sample_uniform_viewpoints(n_views, mesh=self.mesh)
-                imgs  = render_mesh_from_viewpoints(batch, H=H, W=W, renderer=renderer)
+                imgs = self.render_modalities(renderer=renderer, n_views=n_views, H=H, W=W)["rgb"]
             return torch.cat(list(imgs.clamp(0, 1)), dim=2)  # (3, H, W_total)
 
         # ── populate a viser server ───────────────────────────────────────────
@@ -116,7 +183,7 @@ class Object:
 
         kpts_handle = None
         if self.obj_kpts3d is not None:
-            from od3d_basic.cv.visual.viz import _make_kpts_spheres
+            from od3d_basic.data.viz import _make_kpts_spheres
             mask_np = (self.obj_kpts3d_mask.bool()
                        if self.obj_kpts3d_mask is not None
                        else torch.ones(len(self.obj_kpts3d), dtype=torch.bool)).cpu().numpy()
@@ -154,6 +221,28 @@ class ObjectPair:
     trgt_object_id: str
     src_object:     Object
     trgt_object:    Object
+
+    def render_modalities(
+        self,
+        renderer: str = "pyrender",
+        n_views: int = 4,
+        H: int = 256,
+        W: int = 256,
+    ) -> "Optional[dict]":
+        """Return dict of modalities with src and trgt concatenated side-by-side (dim=3)."""
+        import torch
+        src_mods  = self.src_object.render_modalities(renderer=renderer, n_views=n_views, H=H, W=W)
+        trgt_mods = self.trgt_object.render_modalities(renderer=renderer, n_views=n_views, H=H, W=W)
+        if src_mods is None and trgt_mods is None:
+            return None
+        base = src_mods or trgt_mods
+        return {
+            key: torch.cat(
+                [m[key] for m in (src_mods, trgt_mods) if m is not None and key in m],
+                dim=2,  # concatenate along height → (N, 3, H_src + H_trgt, W)
+            )
+            for key in base
+        }
 
     def viz(
         self,
