@@ -3,12 +3,9 @@ import colorsys
 import time
 from typing import TYPE_CHECKING, Optional
 
-from od3d_basic.io import _mesh_to_trimesh
-
 if TYPE_CHECKING:
     from torch import Tensor
-    from torch.utils.data import Dataset
-    from od3d_basic.data.modalities import Mesh, FrameObjectBatchModalities
+    from od3d_basic.data.datatypes import Mesh, FrameObjectBatch
 
 
 def _make_kpts_spheres(kpts_np, mask_np, radius: float = 0.02):
@@ -35,11 +32,24 @@ def _make_kpts_spheres(kpts_np, mask_np, radius: float = 0.02):
     return trimesh.util.concatenate(meshes)
 
 
-def visualize_mesh_dataset(dataset: "Dataset") -> None:
+def visualize_dataset(
+    dataset,
+    render: bool = False,
+    render_frames: int = 6,
+    renderer: str = "pyrender",
+) -> None:
+    """Browse a dataset interactively with Prev / Next navigation.
+
+    render=False (default): passes the viser server to item.viz(server=server)
+    so items add their 3D content (mesh, point cloud, keypoints) directly.
+    render=True: renders render_frames viewpoints with the chosen renderer and
+    shows the resulting strip as the viser background image instead.
+    """
     try:
         import viser
+        import numpy as np
     except ImportError:
-        print("\nInstall viser and trimesh: pip install viser trimesh")
+        print("Install viser: pip install viser")
         return
 
     server = viser.ViserServer()
@@ -49,40 +59,40 @@ def visualize_mesh_dataset(dataset: "Dataset") -> None:
 
     def _clear() -> None:
         for h in handles:
-            h.remove()
+            try:
+                h.remove()
+            except Exception:
+                pass
         handles.clear()
 
     def _load(i: int) -> None:
         _clear()
-        obj = dataset[i]
-        oid = obj.object_id
-
-        if obj.modalities.mesh is not None:
-            mesh_tm = _mesh_to_trimesh(obj.modalities.mesh)
-            h = server.scene.add_mesh_trimesh("/object/mesh", mesh_tm)
-            handles.append(h)
-
-        kpts   = obj.modalities.obj_kpts3d
-        kpts_m = obj.modalities.obj_kpts3d_mask
-        kpts_info = ""
-        if kpts is not None and kpts_m is not None:
-            import numpy as np
-            kpts_np = kpts.numpy()
-            mask_np = kpts_m.numpy().astype(bool)
-            if mask_np.any():
-                kpts_mesh = _make_kpts_spheres(kpts_np, mask_np)
-                if kpts_mesh is not None:
-                    h = server.scene.add_mesh_trimesh("/object/kpts3d", kpts_mesh)
-                    handles.append(h)
-            kpts_info = f"  kpts={mask_np.sum()}/{len(mask_np)}"
-
-        obj_label.value = f"[{i + 1}/{n}]  {oid}"
-        print(f"  [{i + 1}/{n}] {oid}{kpts_info}")
+        item = dataset[i]
+        item_id = getattr(
+            item, "object_id",
+            getattr(item, "frame_id",
+                    getattr(item, "scene_id", str(i))),
+        )
+        if render and render_frames > 0:
+            import torch
+            mesh = getattr(item, "mesh", None)
+            if mesh is not None:
+                batch = sample_uniform_viewpoints(render_frames, mesh=mesh)
+                imgs = render_mesh_from_viewpoints(batch, renderer=renderer)      # (N, 3, H, W)
+                img  = torch.cat(list(imgs.clamp(0, 1)), dim=2)                   # (3, H, W_total)
+                img_np = (img.permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8)  # (H, W, 3)
+                server.scene.set_background_image(img_np, format="png")
+        else:
+            result = item.viz(server=server)
+            if isinstance(result, list):
+                handles.extend(result)
+        label.value = f"[{i + 1}/{n}]  {item_id}"
+        print(f"  [{i + 1}/{n}] {item_id}")
 
     with server.gui.add_folder("Navigation"):
-        obj_label = server.gui.add_text("Object", initial_value="loading…")
-        btn_prev  = server.gui.add_button("← Prev")
-        btn_next  = server.gui.add_button("Next →")
+        label    = server.gui.add_text("Item",   initial_value="loading…")
+        btn_prev = server.gui.add_button("← Prev")
+        btn_next = server.gui.add_button("Next →")
 
     @btn_prev.on_click
     def _(_):
@@ -96,7 +106,7 @@ def visualize_mesh_dataset(dataset: "Dataset") -> None:
 
     _load(0)
     print(f"\nViser running at http://localhost:{server.get_port()}")
-    print("Use Prev / Next in the panel to browse objects. Press Ctrl+C to exit.\n")
+    print("Use Prev / Next in the panel to browse. Press Ctrl+C to exit.\n")
 
     try:
         while True:
@@ -109,12 +119,12 @@ def sample_uniform_viewpoints(
     n: int,
     dist: float = 2.5,
     mesh: "Optional[Mesh]" = None,
-) -> "FrameObjectBatchModalities":
-    """Returns FrameObjectBatchModalities with cam_tform4x4_obj (n, 4, 4) sampled over a sphere."""
+) -> "FrameObjectBatch":
+    """Returns FrameObjectBatch with cam_tform4x4_obj (n, 4, 4) sampled over a sphere."""
     from od3d_basic.cv.geometry.transform import get_cam_tform4x4_obj_for_viewpoints_count
-    from od3d_basic.data.modalities import FrameObjectBatchModalities
+    from od3d_basic.data.datatypes import FrameObjectBatch
     cam_tform4x4_obj = get_cam_tform4x4_obj_for_viewpoints_count(viewpoints_count=n, dist=dist)
-    return FrameObjectBatchModalities(cam_tform4x4_obj=cam_tform4x4_obj, mesh=mesh)
+    return FrameObjectBatch(cam_tform4x4_obj=cam_tform4x4_obj, mesh=mesh)
 
 
 def _render_mesh_pyrender(
@@ -126,6 +136,7 @@ def _render_mesh_pyrender(
 ) -> "Tensor":
     """Render mesh from B viewpoints using pyrender. Returns (B, 3, H, W) in [0, 1]."""
     import torch
+    from od3d_basic.io import _mesh_to_trimesh
     from od3d_basic.cv.visual.show import render_trimesh_to_tensor
     mesh_tm = _mesh_to_trimesh(mesh)
     B = cam_tform4x4_obj.shape[0]
@@ -150,7 +161,6 @@ def _render_mesh_nvdiffrast(
     import nvdiffrast.torch as dr
     from od3d_basic.cv.visual.show import OPEN3D_CAM_TFORM_CAM
 
-    # nvdiffrast requires CUDA tensors
     device = torch.device("cuda")
     cam_tform4x4_obj = cam_tform4x4_obj.to(device)
     cam_intr4x4 = cam_intr4x4.to(device)
@@ -158,7 +168,6 @@ def _render_mesh_nvdiffrast(
 
     znear, zfar = 0.01, 10000.0
 
-    # Build perspective projection matrices (matching meshes.py convention)
     cams_persp4x4 = cam_intr4x4.clone().to(device=device, dtype=torch.float32)
     cams_persp4x4[:, 0, 2] = -cams_persp4x4[:, 0, 2]
     cams_persp4x4[:, 1, 2] = -cams_persp4x4[:, 1, 2]
@@ -195,7 +204,7 @@ def _render_mesh_nvdiffrast(
 
     if mesh.texture is not None and mesh.verts_uvs is not None:
         uv = mesh.verts_uvs.to(device=device, dtype=torch.float32).clone()
-        uv[:, 1] = 1.0 - uv[:, 1]  # flip y back for texture lookup
+        uv[:, 1] = 1.0 - uv[:, 1]
         uv_idx = (mesh.faces_uvs if mesh.faces_uvs is not None else faces).to(device=device, dtype=torch.int32)
         texc, _ = dr.interpolate(uv.unsqueeze(0).expand(B, -1, -1).contiguous(), rast_out, uv_idx.contiguous())
         tex = mesh.texture.permute(1, 2, 0).to(device=device, dtype=torch.float32)
@@ -210,14 +219,14 @@ def _render_mesh_nvdiffrast(
     try:
         color = dr.antialias(color.contiguous(), rast_out, verts_clip.contiguous(), faces.contiguous())
     except Exception:
-        pass  # antialias is optional; skip if OpenGL backend unavailable
+        pass
     mask = (rast_out[..., 3:4] > 0).float()
-    color = color * mask  # black background
+    color = color * mask
     return color.permute(0, 3, 1, 2).contiguous()  # (B, 3, H, W)
 
 
 def render_mesh_from_viewpoints(
-    batch: "FrameObjectBatchModalities",
+    batch: "FrameObjectBatch",
     H: int = 512,
     W: int = 512,
     renderer: str = "pyrender",
@@ -226,7 +235,7 @@ def render_mesh_from_viewpoints(
     Render batch.mesh from viewpoints in batch.cam_tform4x4_obj.
 
     Args:
-        batch: FrameObjectBatchModalities with mesh (shared) and cam_tform4x4_obj (B, 4, 4).
+        batch: FrameObjectBatch with mesh (shared) and cam_tform4x4_obj (B, 4, 4).
                Optionally cam_intr4x4 (B, 4, 4) or (4, 4); defaults to 25° FOV.
         H, W:  Output image size.
         renderer: "pyrender" or "nvdiffrast".
