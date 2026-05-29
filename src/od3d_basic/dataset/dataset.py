@@ -84,8 +84,8 @@ class DatasetConfig:
         path.write_text(yaml.safe_dump(d, sort_keys=False))
 
     @classmethod
-    def from_yaml(cls, path: Path) -> "DatasetConfig":
-        d = _load_yaml_with_defaults(Path(path))
+    def from_yaml(cls, path: Path, overrides: "list[str] | None" = None) -> "DatasetConfig":
+        d = _load_yaml_with_defaults(Path(path), overrides=overrides)
         return cls(
             class_name      = d["class_name"],
             root            = Path(d["root"]) if d.get("root") else Path("data"),
@@ -105,7 +105,7 @@ class DatasetConfig:
         )
 
 
-def _load_yaml_with_defaults(path: Path) -> dict:
+def _load_yaml_with_defaults(path: Path, overrides: "list[str] | None" = None) -> dict:
     """Load a YAML config via Hydra compose, resolving defaults and ${} interpolations."""
     from hydra import compose, initialize_config_dir
     from hydra.core.global_hydra import GlobalHydra
@@ -114,7 +114,7 @@ def _load_yaml_with_defaults(path: Path) -> dict:
     path = Path(path).resolve()
     GlobalHydra.instance().clear()
     with initialize_config_dir(config_dir=str(path.parent), version_base=None):
-        cfg = compose(config_name=path.stem)
+        cfg = compose(config_name=path.stem, overrides=overrides or [])
     GlobalHydra.instance().clear()
     return OmegaConf.to_container(cfg, resolve=True)
 

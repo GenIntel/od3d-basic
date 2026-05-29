@@ -2,11 +2,12 @@
 o3x — od3d_basic command-line interface.
 
 Usage:
-  o3x dataset fetch     --config <yaml> [--url URL]
-  o3x dataset index     --config <yaml> [--db FILE]
-  o3x dataset visualize --config <yaml> [--db FILE] [--limit N] [--object-id ID]
+  o3x dataset fetch     --config <yaml> [--url URL] [--platform PLATFORM]
+  o3x dataset index     --config <yaml> [--db FILE] [--platform PLATFORM]
+  o3x dataset viz       --config <yaml> [--db FILE] [--limit N] [--object-id ID]
                                          [--filter-has-kpts] [--render]
                                          [--render-frames N] [--renderer BACKEND]
+                                         [--platform PLATFORM]
   o3x platform setup    -p <platform>
 """
 from __future__ import annotations
@@ -19,13 +20,18 @@ from pathlib import Path
 # ── dataset sub-parser ────────────────────────────────────────────────────────
 
 def _build_dataset_parser(sub):
-    p = sub.add_parser("dataset", help="Dataset commands (fetch, index, visualize)")
+    p = sub.add_parser("dataset", help="Dataset commands (fetch, index, viz)")
     ds_sub = p.add_subparsers(dest="dataset_command", required=True)
 
     def _add_config(q):
         q.add_argument(
             "--config", required=True, type=Path, metavar="YAML",
             help="Path to a DatasetConfig YAML (must contain class_name)",
+        )
+        q.add_argument(
+            "--platform", default="default", metavar="PLATFORM",
+            help="Platform name whose path_datasets_raw / path_datasets_preprocess "
+                 "override the dataset config paths (default: default)",
         )
 
     p_fetch = ds_sub.add_parser("fetch", help="Download / prepare the dataset")
@@ -36,7 +42,7 @@ def _build_dataset_parser(sub):
     _add_config(p_index)
     p_index.add_argument("--db", type=Path, default=None, metavar="FILE")
 
-    p_vis = ds_sub.add_parser("visualize", help="Summarize and optionally render dataset objects")
+    p_vis = ds_sub.add_parser("viz", help="Summarize and optionally render dataset objects")
     _add_config(p_vis)
     p_vis.add_argument("--db", type=Path, default=None, metavar="FILE")
     p_vis.add_argument("--limit", type=int, default=20, metavar="N")
@@ -48,15 +54,16 @@ def _build_dataset_parser(sub):
 
 
 def _run_dataset(args):
-    from od3d_basic.dataset.cli import _load_class_from_config
+    from od3d_basic.dataset.cli import _load_class_from_config, _platform_to_dataset_overrides
 
-    cls, cfg = _load_class_from_config(args.config)
+    overrides = _platform_to_dataset_overrides(args.platform)
+    cls, cfg = _load_class_from_config(args.config, overrides=overrides)
 
     if args.dataset_command == "fetch":
         cls.fetch(cfg, url=args.url)
     elif args.dataset_command == "index":
         cls.index(cfg, db=args.db)
-    elif args.dataset_command == "visualize":
+    elif args.dataset_command == "viz":
         if args.filter_has_kpts:
             cfg.filter_has_kpts = True
         cls.visualize(
@@ -213,6 +220,8 @@ def _run_platform_setup(args):
     path_ws        = cfg.get("path_ws", "")
     path_cuda      = cfg.get("path_cuda", "/usr/local/cuda-12.4")
     python_version = str(cfg.get("python_version", "3.10"))
+    torch_version  = str(cfg.get("torch_version", "2.6.0"))
+    install_diff3f = cfg.get("install_diff3f", False)
     branch         = cfg.get("branch", "main")
     pull           = cfg.get("pull", True)
     pull_submodules = cfg.get("pull_submodules", True)
@@ -278,6 +287,8 @@ def _run_platform_setup(args):
         "PATH_WS":         path_ws,
         "PATH_CUDA":       path_cuda,
         "PYTHON_VERSION":  python_version,
+        "TORCH_VERSION":   torch_version,
+        "INSTALL_DIFF3F":  "true" if install_diff3f else "false",
         "REPO_URL":        repo_url,   # housecorr3d HTTPS URL with token
         "REPO_NAME":       repo_name,  # derived from remote URL, e.g. HouseCorr3Dv2
         "BRANCH":          branch,
@@ -565,16 +576,19 @@ def _run_platform_runi(args):
     from omegaconf import OmegaConf
     from pathlib import Path
 
-    path_ws    = cfg.get("path_ws", "")
-    path_cuda       = cfg.get("path_cuda", "/usr/local/cuda-12.4")
-    python_version  = str(cfg.get("python_version", "3.10"))
-    branch          = str(cfg.get("branch", "main"))
-    pull            = str(cfg.get("pull", True)).lower()
-    pull_subs       = str(cfg.get("pull_submodules", True)).lower()
+    path_ws        = cfg.get("path_ws", "")
+    path_cuda      = cfg.get("path_cuda", "/usr/local/cuda-12.4")
+    python_version = str(cfg.get("python_version", "3.10"))
+    torch_version  = str(cfg.get("torch_version", "2.6.0"))
+    install_diff3f = "true" if cfg.get("install_diff3f", False) else "false"
+    branch         = str(cfg.get("branch", "main"))
+    pull           = str(cfg.get("pull", True)).lower()
+    pull_subs      = str(cfg.get("pull_submodules", True)).lower()
 
     cuda_tag   = "cu" + os.path.basename(path_cuda).replace("cuda-", "").replace(".", "")
     py_tag     = "py" + python_version.replace(".", "")
-    venv_path  = f"{path_ws}/venv_{py_tag}_{cuda_tag}" if path_ws else ""
+    torch_tag  = "torch" + ".".join(torch_version.split(".")[:2]).replace(".", "")
+    venv_path  = f"{path_ws}/venv_{py_tag}_{cuda_tag}_{torch_tag}" if path_ws else ""
 
     # Derive REPO_URL (with token) and REPO_NAME from the local git remote —
     # same logic as _run_platform_setup.
@@ -611,6 +625,8 @@ def _run_platform_runi(args):
         f",PATH_WS={path_ws}"
         f",PATH_CUDA={path_cuda}"
         f",PYTHON_VERSION={python_version}"
+        f",TORCH_VERSION={torch_version}"
+        f",INSTALL_DIFF3F={install_diff3f}"
         f",REPO_URL={repo_url}"
         f",REPO_NAME={repo_name}"
         f",BRANCH={branch}"

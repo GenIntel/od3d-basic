@@ -2,13 +2,16 @@
 od3d_basic dataset CLI.
 
 Usage:
-  od3d_dataset fetch     --config housecorr3d.yaml [--url URL]
-  od3d_dataset index     --config housecorr3d.yaml [--db index.db]
-  od3d_dataset visualize --config housecorr3d.yaml [--db index.db] [--limit N] [--object-id ID] [--render]
+  od3d_dataset fetch     --config housecorr3d.yaml [--url URL] [--platform PLATFORM]
+  od3d_dataset index     --config housecorr3d.yaml [--db index.db] [--platform PLATFORM]
+  od3d_dataset viz       --config housecorr3d.yaml [--db index.db] [--limit N] [--object-id ID] [--render] [--platform PLATFORM]
 
 The config YAML must contain a 'class_name' field that matches a registered
 dataset (e.g. 'HouseCorr3D').  All paths and options are read from the config;
 command-line flags only override what needs to be overridden at run-time.
+When --platform is given the platform's path_datasets_raw / path_datasets_preprocess
+values override the corresponding variables in the dataset config before Hydra
+resolves any ${} interpolations.
 """
 from __future__ import annotations
 
@@ -19,8 +22,20 @@ from pathlib import Path
 from od3d_basic.dataset.dataset import DatasetConfig, _REGISTRY_DATASETS, _ensure_dataset_imported
 
 
-def _load_class_from_config(config_path: Path):
-    cfg = DatasetConfig.from_yaml(config_path)
+def _platform_to_dataset_overrides(platform: str) -> list[str]:
+    """Return Hydra override strings derived from the platform config."""
+    from od3d_basic.cli import _load_platform_config
+    plat_cfg, _ = _load_platform_config(platform)
+    overrides: list[str] = []
+    if raw := plat_cfg.get("path_datasets_raw"):
+        overrides.append(f"path_datasets_raw={raw}")
+    if pre := plat_cfg.get("path_datasets_preprocess"):
+        overrides.append(f"path_datasets_preprocess={pre}")
+    return overrides
+
+
+def _load_class_from_config(config_path: Path, overrides: list[str] | None = None):
+    cfg = DatasetConfig.from_yaml(config_path, overrides=overrides)
     _ensure_dataset_imported(cfg.class_name)
 
     lower = cfg.class_name.lower()
@@ -49,6 +64,11 @@ def main(argv=None) -> None:
             "--config", required=True, type=Path, metavar="YAML",
             help="Path to a DatasetConfig YAML file (must contain class_name)",
         )
+        p.add_argument(
+            "--platform", default="default", metavar="PLATFORM",
+            help="Platform name whose path_datasets_raw / path_datasets_preprocess "
+                 "override the dataset config paths (default: default)",
+        )
 
     p_fetch = sub.add_parser("fetch", help="Download / prepare the dataset")
     _add_config(p_fetch)
@@ -61,7 +81,7 @@ def main(argv=None) -> None:
         help="SQLite output file (default: <path_preprocess>/index.db)",
     )
 
-    p_vis = sub.add_parser("visualize", help="Show dataset summary and optionally render meshes")
+    p_vis = sub.add_parser("viz", help="Show dataset summary and optionally render meshes")
     _add_config(p_vis)
     p_vis.add_argument(
         "--db", type=Path, default=None, metavar="FILE",
@@ -81,13 +101,14 @@ def main(argv=None) -> None:
                        help="Renderer backend for --render-frames (default: pyrender)")
 
     args = parser.parse_args(argv)
-    cls, cfg = _load_class_from_config(args.config)
+    overrides = _platform_to_dataset_overrides(args.platform)
+    cls, cfg = _load_class_from_config(args.config, overrides=overrides)
 
     if args.command == "fetch":
         cls.fetch(cfg, url=args.url)
     elif args.command == "index":
         cls.index(cfg, db=args.db)
-    elif args.command == "visualize":
+    elif args.command == "viz":
         if args.filter_has_kpts:
             cfg.filter_has_kpts = True
         cls.visualize(
