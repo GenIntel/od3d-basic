@@ -1,5 +1,5 @@
 defaults:
-  - housecorr3d
+  - hc3d
   - _self_
 
 item_type: object # frame, object, scene, frame_object, scene_object

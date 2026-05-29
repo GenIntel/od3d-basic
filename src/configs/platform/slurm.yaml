@@ -20,6 +20,7 @@ path_datasets_raw: /work/dlclarge1/sommerl-od3d/datasets # sshfs maythux@192.168
 path_datasets_preprocess: /work/dlclarge1/sommerl-od3d/datasets # for student: /misc/student/srinivap/datasets_preprocess
 
 partition:  alldlc_gpu-rtx2080 # lmb_gpu-rtx2080 # lmb_gpu-teslaP100 lmb_gpu-1080ti, lmb_gpu-rtx2080, testdlc_gpu-rtx2080, alldlc_gpu-rtx3080, alldlc_gpu-rtx2080, lmbdlc_gpu-rtx2080
+
 # 1. lmb_gpu-rtx2080 : usually empty, only 3 slots
 # 2. lmbdlc_gpu-rtx2080 : often pending (but eventually it will work)
 # 3. alldlc_gpu-rtx3080 : usually empty (actually not anymore), but fewer gb?

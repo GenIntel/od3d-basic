@@ -2,13 +2,13 @@
 od3d_basic dataset CLI.
 
 Usage:
-  od3d_dataset fetch     --config housecorr3d.yaml [--url URL] [--platform PLATFORM]
-  od3d_dataset index     --config housecorr3d.yaml [--db index.db] [--platform PLATFORM]
-  od3d_dataset viz       --config housecorr3d.yaml [--db index.db] [--limit N] [--object-id ID] [--render] [--platform PLATFORM]
+  od3d_dataset fetch  -d housecorr3d_object_pair [--url URL] [--platform PLATFORM]
+  od3d_dataset index  -d housecorr3d_object_pair [--db index.db] [--platform PLATFORM]
+  od3d_dataset viz    -d housecorr3d_object_pair [--db index.db] [--limit N] [--object-id ID] [--render] [--platform PLATFORM]
 
-The config YAML must contain a 'class_name' field that matches a registered
-dataset (e.g. 'HouseCorr3D').  All paths and options are read from the config;
-command-line flags only override what needs to be overridden at run-time.
+-d / --config accepts either a short name (e.g. housecorr3d_object_pair, resolved from
+configs/dataset/) or a full path to a YAML file.  The YAML must contain a 'class_name'
+field that matches a registered dataset (e.g. 'HouseCorr3D').
 When --platform is given the platform's path_datasets_raw / path_datasets_preprocess
 values override the corresponding variables in the dataset config before Hydra
 resolves any ${} interpolations.
@@ -20,6 +20,27 @@ import sys
 from pathlib import Path
 
 from od3d_basic.dataset.dataset import DatasetConfig, _REGISTRY_DATASETS, _ensure_dataset_imported
+
+
+def _resolve_dataset_config(name_or_path: str) -> Path:
+    """Resolve a dataset config name or path to an absolute Path.
+
+    Accepts either a full path (used as-is if it exists) or a short name like
+    'housecorr3d_object_pair' which is looked up in configs/dataset/.
+    """
+    p = Path(name_or_path)
+    if p.exists():
+        return p
+    configs_dir = (Path(__file__).parent.parent.parent / "configs" / "dataset").resolve()
+    stem = name_or_path if not name_or_path.endswith(".yaml") else name_or_path[:-5]
+    candidate = configs_dir / f"{stem}.yaml"
+    if candidate.exists():
+        return candidate
+    raise argparse.ArgumentTypeError(
+        f"Dataset config not found: {name_or_path!r}\n"
+        f"  Tried path: {p.resolve()}\n"
+        f"  Tried name: {candidate}"
+    )
 
 
 def _platform_to_dataset_overrides(platform: str) -> list[str]:
@@ -61,8 +82,9 @@ def main(argv=None) -> None:
 
     def _add_config(p):
         p.add_argument(
-            "--config", required=True, type=Path, metavar="YAML",
-            help="Path to a DatasetConfig YAML file (must contain class_name)",
+            "-d", "--config", required=True, type=_resolve_dataset_config, metavar="DATASET",
+            help="Dataset config name (e.g. housecorr3d_object_pair, resolved from "
+                 "configs/dataset/) or full path to a YAML file",
         )
         p.add_argument(
             "--platform", default="default", metavar="PLATFORM",

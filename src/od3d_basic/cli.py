@@ -2,12 +2,13 @@
 o3x — od3d_basic command-line interface.
 
 Usage:
-  o3x dataset fetch     --config <yaml> [--url URL] [--platform PLATFORM]
-  o3x dataset index     --config <yaml> [--db FILE] [--platform PLATFORM]
-  o3x dataset viz       --config <yaml> [--db FILE] [--limit N] [--object-id ID]
+  o3x dataset fetch  -d housecorr3d_object_pair [--url URL] [--platform PLATFORM]
+  o3x dataset index  -d housecorr3d_object_pair [--db FILE] [--platform PLATFORM]
+  o3x dataset viz    -d housecorr3d_object_pair [--db FILE] [--limit N] [--object-id ID]
                                          [--filter-has-kpts] [--render]
                                          [--render-frames N] [--renderer BACKEND]
                                          [--platform PLATFORM]
+  o3x bench run      -b <benchmark> [-p <platform>]
   o3x platform setup    -p <platform>
 """
 from __future__ import annotations
@@ -24,9 +25,11 @@ def _build_dataset_parser(sub):
     ds_sub = p.add_subparsers(dest="dataset_command", required=True)
 
     def _add_config(q):
+        from od3d_basic.dataset.cli import _resolve_dataset_config
         q.add_argument(
-            "--config", required=True, type=Path, metavar="YAML",
-            help="Path to a DatasetConfig YAML (must contain class_name)",
+            "-d", "--config", required=True, type=_resolve_dataset_config, metavar="DATASET",
+            help="Dataset config name (e.g. housecorr3d_object_pair, resolved from "
+                 "configs/dataset/) or full path to a YAML file",
         )
         q.add_argument(
             "--platform", default="default", metavar="PLATFORM",
@@ -112,6 +115,19 @@ def _build_platform_parser(sub):
     p_runi.add_argument(
         "-p", "--platform", default="slurm", metavar="PLATFORM",
         help="Platform name matching a config in configs/platform/ (default: slurm)",
+    )
+
+    p_run = plat_sub.add_parser(
+        "run",
+        help="Run a command on a compute node (non-interactive srun)",
+    )
+    p_run.add_argument(
+        "-p", "--platform", default="slurm", metavar="PLATFORM",
+        help="Platform name matching a config in configs/platform/ (default: slurm)",
+    )
+    p_run.add_argument(
+        "-c", "--command", required=True, metavar="CMD",
+        help="Shell command to execute on the compute node",
     )
 
 
@@ -539,15 +555,17 @@ def _run_platform_overview(args):
             jobs = _fetch_jobs(ssh_host, username)
 
 
-def _run_platform_runi(args):
-    import subprocess
+def _platform_srun_context(platform: str):
+    """Return (ssh_host, srun_base, repo_path, venv_path, path_cuda, path_ws) for srun commands."""
+    import os, re, subprocess
+    from omegaconf import OmegaConf
 
-    cfg, _ = _load_platform_config(args.platform)
+    cfg, _ = _load_platform_config(platform)
 
     ssh_host = cfg.get("ssh")
     if not ssh_host or ssh_host is False:
         raise ValueError(
-            f"Platform '{args.platform}' has no ssh host configured (ssh: {ssh_host!r})"
+            f"Platform '{platform}' has no ssh host configured (ssh: {ssh_host!r})"
         )
 
     partition     = cfg.get("partition", None)
@@ -559,23 +577,6 @@ def _run_platform_runi(args):
     nodes_exclude = cfg.get("nodes_exclude", None)
     total_mem     = _multiply_metric_with_unit(ram_per_cpu, cpu_count)
 
-    srun = (
-        f"srun"
-        f" --nodes {node_count}"
-        f" --ntasks-per-node 1"
-        f" --gres gpu:{gpu_count}"
-        f" --cpus-per-task {cpu_count}"
-        f" --mem {total_mem}"
-        f" --time {walltime}"
-    )
-    if partition:
-        srun += f" --partition {partition}"
-    if nodes_exclude:
-        srun += f" --exclude {nodes_exclude}"
-    import os, re, shlex
-    from omegaconf import OmegaConf
-    from pathlib import Path
-
     path_ws        = cfg.get("path_ws", "")
     path_cuda      = cfg.get("path_cuda", "/usr/local/cuda-12.4")
     python_version = str(cfg.get("python_version", "3.10"))
@@ -585,12 +586,10 @@ def _run_platform_runi(args):
     pull           = str(cfg.get("pull", True)).lower()
     pull_subs      = str(cfg.get("pull_submodules", True)).lower()
 
-    cuda_tag   = "cu" + os.path.basename(path_cuda).replace("cuda-", "").replace(".", "")
-    py_tag     = "py" + python_version.replace(".", "")
-    torch_tag  = "torch" + ".".join(torch_version.split(".")[:2]).replace(".", "")
+    cuda_tag  = "cu" + os.path.basename(path_cuda).replace("cuda-", "").replace(".", "")
+    py_tag    = "py" + python_version.replace(".", "")
+    torch_tag = "torch" + ".".join(torch_version.split(".")[:2]).replace(".", "")
 
-    # Derive REPO_URL (with token) and REPO_NAME from the local git remote —
-    # same logic as _run_platform_setup.
     token = OmegaConf.select(cfg, "credentials.github.token", default="") or ""
     try:
         submodule_root = subprocess.check_output(
@@ -612,11 +611,25 @@ def _run_platform_runi(args):
         repo_url  = ""
         repo_name = ""
 
-    repo_path  = f"{path_ws}/{repo_name}" if (path_ws and repo_name) else path_ws
-    venv_path  = f"{repo_path}/venv_{py_tag}_{cuda_tag}_{torch_tag}" if repo_path else ""
+    repo_path = f"{path_ws}/{repo_name}" if (path_ws and repo_name) else path_ws
+    venv_path = f"{repo_path}/venv_{py_tag}_{cuda_tag}_{torch_tag}" if repo_path else ""
 
+    srun = (
+        f"srun"
+        f" --nodes {node_count}"
+        f" --ntasks-per-node 1"
+        f" --gres gpu:{gpu_count}"
+        f" --cpus-per-task {cpu_count}"
+        f" --mem {total_mem}"
+        f" --time {walltime}"
+    )
+    if partition:
+        srun += f" --partition {partition}"
+    if nodes_exclude:
+        srun += f" --exclude {nodes_exclude}"
     if path_ws:
         srun += f" --chdir {path_ws}"
+
     _proxy = "http://tfproxy.informatik.intra.uni-freiburg.de:8080"
     srun += (
         f" --export=ALL"
@@ -638,9 +651,12 @@ def _run_platform_runi(args):
         f",CUDACXX={path_cuda}/bin/nvcc"
     )
 
-    # Write a small activation script to the remote so bash --init-file can
-    # source it without wrapping srun in a bash -c subshell (which breaks the PTY).
-    init_lines = [
+    return ssh_host, srun, repo_path, venv_path, path_cuda, path_ws
+
+
+def _srun_env_lines(path_cuda: str, venv_path: str, repo_path: str) -> list[str]:
+    """Shell lines that set up CUDA env, activate the venv, and cd into the repo."""
+    lines = [
         "[ -f ~/.bashrc ] && . ~/.bashrc",
         f"export PATH={path_cuda}/bin:$PATH",
         f"export LD_LIBRARY_PATH={path_cuda}/lib64:${{LD_LIBRARY_PATH:-}}",
@@ -648,15 +664,47 @@ def _run_platform_runi(args):
         f"export LIBRARY_PATH=${{LIBRARY_PATH:-}}:{path_cuda}/targets/x86_64-linux/lib",
     ]
     if venv_path:
-        init_lines.append(f"[ -d {venv_path} ] && source {venv_path}/bin/activate")
+        lines.append(f"[ -d {venv_path} ] && source {venv_path}/bin/activate")
+    if repo_path:
+        lines.append(f"cd {repo_path}")
+    return lines
+
+
+def _run_platform_runi(args):
+    import subprocess
+
+    ssh_host, srun, repo_path, venv_path, path_cuda, path_ws = _platform_srun_context(args.platform)
+
+    # Write a small activation script so bash --init-file can source it without
+    # wrapping srun in a bash -c subshell (which breaks the PTY).
+    init_lines = _srun_env_lines(path_cuda, venv_path, repo_path)
     remote_init = f"{path_ws}/.od3d_init" if path_ws else "~/.od3d_init"
-    init_script = "\n".join(init_lines)
-    subprocess.run(["ssh", ssh_host, f"cat > {remote_init}"], input=init_script, text=True, check=True)
+    subprocess.run(
+        ["ssh", ssh_host, f"cat > {remote_init}"],
+        input="\n".join(init_lines), text=True, check=True,
+    )
 
     srun += f" --pty bash --init-file {remote_init}"
-
-    print(f"Opening interactive session on {ssh_host} in {path_ws or '~'}…")
+    print(f"Opening interactive session on {ssh_host} in {repo_path or path_ws or '~'}…")
     subprocess.run(["ssh", "-t", ssh_host, srun])
+
+
+def _run_platform_run(args):
+    import subprocess
+
+    ssh_host, srun, repo_path, venv_path, path_cuda, path_ws = _platform_srun_context(args.platform)
+
+    # Build a script that sets up the env and runs the user command.
+    script_lines = _srun_env_lines(path_cuda, venv_path, repo_path) + [args.command]
+    remote_script = f"{path_ws}/.od3d_run" if path_ws else "~/.od3d_run"
+    subprocess.run(
+        ["ssh", ssh_host, f"cat > {remote_script} && chmod +x {remote_script}"],
+        input="\n".join(script_lines), text=True, check=True,
+    )
+
+    srun += f" bash {remote_script}"
+    print(f"Running on {ssh_host} in {repo_path or path_ws or '~'}: {args.command}")
+    subprocess.run(["ssh", ssh_host, srun])
 
 
 def _run_platform(args):
@@ -666,6 +714,138 @@ def _run_platform(args):
         _run_platform_overview(args)
     elif args.platform_command == "runi":
         _run_platform_runi(args)
+    elif args.platform_command == "run":
+        _run_platform_run(args)
+
+
+# ── bench sub-parser ──────────────────────────────────────────────────────────
+
+def _resolve_bench_config(name_or_path: str) -> Path:
+    """Resolve a benchmark config name or path to an absolute Path.
+
+    Accepts a full/relative path (used as-is if it exists) or a short name
+    resolved against src/configs/eval/ or src/configs/ relative to CWD.
+    """
+    p = Path(name_or_path)
+    if p.exists():
+        return p.resolve()
+    stem = name_or_path if not name_or_path.endswith(".yaml") else name_or_path[:-5]
+    for subdir in ("src/configs/eval", "src/configs"):
+        candidate = Path.cwd() / subdir / f"{stem}.yaml"
+        if candidate.exists():
+            return candidate
+    raise argparse.ArgumentTypeError(
+        f"Benchmark config not found: {name_or_path!r}\n"
+        f"  Tried: {p.resolve()}\n"
+        f"  Tried: {Path.cwd() / 'src/configs/eval' / (stem + '.yaml')}\n"
+        f"  Tried: {Path.cwd() / 'src/configs' / (stem + '.yaml')}"
+    )
+
+
+def _build_bench_parser(sub):
+    p = sub.add_parser("bench", help="Benchmark commands")
+    bench_sub = p.add_subparsers(dest="bench_command", required=True)
+
+    p_run = bench_sub.add_parser("run", help="Run a benchmark on a dataset")
+    p_run.add_argument(
+        "-b", "--benchmark", required=True, type=_resolve_bench_config, metavar="BENCHMARK",
+        help="Benchmark config name (resolved from src/configs/eval/) or full path to YAML",
+    )
+    p_run.add_argument(
+        "-p", "--platform", default=None, metavar="PLATFORM",
+        help="Override the platform from the benchmark config's defaults list",
+    )
+
+
+def _run_bench(args) -> None:
+    if args.bench_command == "run":
+        _run_bench_run(args)
+
+
+def _run_bench_run(args) -> None:
+    import yaml
+    from torch.utils.data import DataLoader
+
+    from od3d_basic.dataset.dataset import DatasetConfig, build_dataset, _load_yaml_with_defaults
+    from od3d_basic.dataset.cli import _platform_to_dataset_overrides, _resolve_dataset_config
+    from od3d_basic.task.task import build_task
+    from od3d_basic.data.datatypes.object import collate_object_pairs
+    from omegaconf import OmegaConf
+
+    with open(args.benchmark) as f:
+        raw = yaml.safe_load(f)
+
+    # ── resolve platform and dataset from defaults list ───────────────────────
+    defaults = raw.pop("defaults", []) or []
+    default_platform = None
+    default_dataset  = None
+    for item in defaults:
+        if isinstance(item, dict):
+            default_platform = item.get("platform", default_platform)
+            default_dataset  = item.get("dataset",  default_dataset)
+
+    # CLI --platform overrides the defaults entry
+    platform = args.platform if args.platform is not None else (default_platform or "default")
+
+    # ── load base dataset config with platform overrides ─────────────────────
+    overrides = _platform_to_dataset_overrides(platform)
+    if default_dataset:
+        ds_base = _load_yaml_with_defaults(_resolve_dataset_config(default_dataset), overrides=overrides)
+    else:
+        ds_base = {}
+
+    # merge eval config's dataset: section on top (eval-specific overrides win)
+    eval_ds_overrides = raw.get("dataset") or {}
+    if eval_ds_overrides:
+        ds_base = OmegaConf.to_container(
+            OmegaConf.merge(OmegaConf.create(ds_base), OmegaConf.create(eval_ds_overrides)),
+            resolve=True,
+        )
+
+    dataset_cfg = DatasetConfig.from_dict(ds_base)
+
+    dataset = build_dataset(dataset_cfg)
+    print(f"Dataset: {dataset_cfg.class_name}  ({len(dataset)} items)")
+
+    eval_cfg   = raw.get("eval", {})
+    batch_size = eval_cfg.get("batch_size", 4)
+
+    loader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        collate_fn=collate_object_pairs,
+        shuffle=False,
+        num_workers=0,
+    )
+
+    task_cfg = OmegaConf.create(raw["task"])
+    task     = build_task(task_cfg)
+    print(f"Task:    {raw['task']['class_name']}")
+    print(f"Eval:    batch_size={batch_size}  n_batches={len(loader)}\n")
+
+    accum: dict[str, list] = {}
+    n_samples = 0
+
+    for batch_idx, batch in enumerate(loader):
+        quant, _ = task(batch)
+
+        B = (batch.src_obj_kpts3d.shape[0]
+             if batch.src_obj_kpts3d is not None else batch_size)
+        n_samples += B
+
+        for metric_name, values in quant.mean().items():
+            accum.setdefault(metric_name, []).append(values)
+
+        if (batch_idx + 1) % 10 == 0 or (batch_idx + 1) == len(loader):
+            print(f"  [{batch_idx + 1:4d}/{len(loader)}]  samples={n_samples}", end="")
+            for k, vals in accum.items():
+                print(f"  {k}={sum(vals)/len(vals):.4f}", end="")
+            print()
+
+    print(f"\n{'─'*50}")
+    print(f"Results  ({n_samples} samples)")
+    for k, vals in accum.items():
+        print(f"  {k:<25} {sum(vals)/len(vals):.4f}")
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
@@ -677,12 +857,15 @@ def main(argv=None) -> None:
     )
     sub = parser.add_subparsers(dest="command", required=True)
     _build_dataset_parser(sub)
+    _build_bench_parser(sub)
     _build_platform_parser(sub)
 
     args = parser.parse_args(argv)
 
     if args.command == "dataset":
         _run_dataset(args)
+    elif args.command == "bench":
+        _run_bench(args)
     elif args.command == "platform":
         _run_platform(args)
 

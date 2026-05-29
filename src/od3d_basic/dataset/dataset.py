@@ -84,8 +84,7 @@ class DatasetConfig:
         path.write_text(yaml.safe_dump(d, sort_keys=False))
 
     @classmethod
-    def from_yaml(cls, path: Path, overrides: "list[str] | None" = None) -> "DatasetConfig":
-        d = _load_yaml_with_defaults(Path(path), overrides=overrides)
+    def from_dict(cls, d: dict) -> "DatasetConfig":
         return cls(
             class_name      = d["class_name"],
             root            = Path(d["root"]) if d.get("root") else Path("data"),
@@ -103,6 +102,10 @@ class DatasetConfig:
             filter_has_kpts = bool(d.get("filter_has_kpts", False)),
             extra           = d.get("extra", {}),
         )
+
+    @classmethod
+    def from_yaml(cls, path: Path, overrides: "list[str] | None" = None) -> "DatasetConfig":
+        return cls.from_dict(_load_yaml_with_defaults(Path(path), overrides=overrides))
 
 
 def _load_yaml_with_defaults(path: Path, overrides: "list[str] | None" = None) -> dict:
