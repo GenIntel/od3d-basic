@@ -14,7 +14,7 @@ path_models: ${.path_ws}/models
 path_cuda: /usr/local/cuda-12.4
 python_version: "3.10"
 torch_version: "2.6.0"
-install_diff3f: true
+install_diff3f: True
 
 url_repo: https://${.credentials.github.token}@github.com/GenIntel/od3d.git
 

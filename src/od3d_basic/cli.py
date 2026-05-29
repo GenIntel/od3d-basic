@@ -588,7 +588,6 @@ def _run_platform_runi(args):
     cuda_tag   = "cu" + os.path.basename(path_cuda).replace("cuda-", "").replace(".", "")
     py_tag     = "py" + python_version.replace(".", "")
     torch_tag  = "torch" + ".".join(torch_version.split(".")[:2]).replace(".", "")
-    venv_path  = f"{path_ws}/venv_{py_tag}_{cuda_tag}_{torch_tag}" if path_ws else ""
 
     # Derive REPO_URL (with token) and REPO_NAME from the local git remote —
     # same logic as _run_platform_setup.
@@ -612,6 +611,9 @@ def _run_platform_runi(args):
     except subprocess.CalledProcessError:
         repo_url  = ""
         repo_name = ""
+
+    repo_path  = f"{path_ws}/{repo_name}" if (path_ws and repo_name) else path_ws
+    venv_path  = f"{repo_path}/venv_{py_tag}_{cuda_tag}_{torch_tag}" if repo_path else ""
 
     if path_ws:
         srun += f" --chdir {path_ws}"
