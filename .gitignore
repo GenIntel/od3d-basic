@@ -9,3 +9,11 @@ build/
 venv/
 .env
 *.so
+
+
+# credentials
+src/configs/platform/credentials/custom/default_custom.yaml
+src/configs/platform/custom/local_custom.yaml
+src/configs/platform/custom/default_custom.yaml
+src/configs/platform/custom/slurm_custom.yaml
+src/configs/platform/local_akopyane.yaml

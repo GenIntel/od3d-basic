@@ -4,4 +4,9 @@ defaults:
 
 item_type: object_pair # frame, object, scene, frame_object, scene_object
 
-mesh_type: "mc16_vuni4_r256_fdinov2s"
+#mesh_type: "mc16_vuni4_r256_fdinov2s"
+mesh_type: "mc16_vuni100_r256_fdiff3f"
+
+#categories:       # null = all categories; list strings to restrict, e.g.:
+#  - hair_dryer
+#  # - mug

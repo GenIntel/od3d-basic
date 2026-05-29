@@ -1,0 +1,27 @@
+defaults:
+  - _self_
+  - credentials@credentials: default
+  - optional custom@: default_custom
+
+ssh: False
+
+path_datasets_raw: /data/lmbraid19/sommerl/datasets # sshfs maythux@192.168.xx.xx:/home/maythuxServ/Mounted ~/remoteDir
+path_datasets_preprocess: /data/lmbraid19/sommerl/datasets # for student: /misc/student/srinivap/datasets_preprocess
+
+path_ws: /data/lmbraid19/sommerl/workspace
+path_exps: ${.path_ws}/exps
+path_models: ${.path_ws}/models
+path_cuda: /usr/local/cuda-12.4
+
+path_repo: /home/sommerl/PycharmProjects/od3d-basic
+url_repo: https://${.credentials.github.token}@github.com/GenIntel/od3d.git
+
+renderer: open3d # pytorch3d
+
+ram_per_cpu: "5gb"
+cpu_count_per_gpu: 16
+gpu_count_per_node: 1
+node_count: 1
+walltime: "24:00:00" #  "24:00:00"
+
+

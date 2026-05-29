@@ -1,0 +1,15 @@
+path_home: /home/sommerl
+path_logs: /home/sommerl
+path_od3d: /home/sommerl/PycharmProjects/od3d
+#path_exps: /scratch/sommerl/exps
+path_datasets_raw: /data/lmbraid19/sommerl/datasets # sshfs maythux@192.168.xx.xx:/home/maythuxServ/Mounted ~/remoteDir
+path_datasets_preprocess: /data/lmbraid19/sommerl/datasets # for student: /misc/student/srinivap/datasets_preprocess
+
+#path_exps: /data/lmbraid21/sommerl/exps
+#url_od3d: https://${credentials.github.token}@github.com/GenIntel/od3d.git
+url_od3d: git@github.com:GenIntel/od3d.git
+
+path_ws: /data/lmbraid19/sommerl/workspace
+path_exps: ${.path_ws}/exps
+
+path_cuda: /usr/local/cuda-12.4

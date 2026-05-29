@@ -1,0 +1,12 @@
+defaults:
+  - default
+  - _self_
+  - optional custom@: local_custom
+
+
+path_ws: /home/sommerl/workspace
+
+path_cuda: /usr/local/cuda-12.4
+
+path_datasets_raw: /home/sommerl/datasets # sshfs maythux@192.168.xx.xx:/home/maythuxServ/Mounted ~/remoteDir
+path_datasets_preprocess: /home/sommerl/datasets # for student: /misc/student/srinivap/datasets_preprocess

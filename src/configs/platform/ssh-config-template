@@ -1,0 +1,90 @@
+Host freiburg
+    HostName login.informatik.uni-freiburg.de
+    Port 22
+    User sommerl
+
+Host roycoffee
+    HostName roycoffee
+    User sommerl
+    ProxyJump freiburg
+    Port 22
+
+Host slurm
+    HostName kis3bat1.rz.ki.privat
+    # ProxyJump freiburg
+
+
+Host juwels_booster
+    User sommer7
+    HostName juwels-booster.fz-juelich.de
+    ServerAliveInterval 60
+    IdentityFile ~/.ssh/id_ed25519_juwels
+    #MACs hmac-sha2-512-etm@openssh.com
+
+
+# jumping on slurm to juelich
+# Host lmblogin
+#     HostName lmblogin.informatik.uni-freiburg.de
+
+# Host juwels_booster
+#     ProxyJump lmblogin
+#     User sommer7
+#     HostName juwels-booster.fz-juelich.de
+#     ServerAliveInterval 60
+#     IdentityFile ~/.ssh/id_ed25519_juwels
+
+Host *.github.com
+    Port 22
+    ServerAliveInterval 60 # keep alive 30 x 60 seconds
+    ServerAliveCountMax 30
+
+Host kislurm
+    HostName kis3bat1.rz.ki.privat
+
+Host dlcgpu06
+    ProxyJump kislurm
+
+Host dlc2gpu17
+    ProxyJump kislurm
+
+Host dlc2gpu16
+    ProxyJump kislurm
+
+Host dlc2gpu16
+    ProxyJump kislurm
+
+Host dlcgpu13
+    ProxyJump kislurm
+
+Host dlc2gpu01
+    ProxyJump kislurm
+
+Host dlc2gpu02
+    ProxyJump kislurm
+
+Host dlc2gpu03
+    ProxyJump kislurm
+
+Host dlc2gpu04
+    ProxyJump kislurm
+
+Host dlc2gpu05
+    ProxyJump kislurm
+
+Host dlc2gpu08
+    ProxyJump kislurm
+
+Host dlc2gpu06
+    ProxyJump kislurm
+
+Host dlc2gpu11
+    ProxyJump kislurm
+
+Host dlc2gpu14
+    ProxyJump kislurm
+
+Host dlc2gpu15
+    ProxyJump kislurm
+
+Host dlc2gpu10
+    ProxyJump kislurm

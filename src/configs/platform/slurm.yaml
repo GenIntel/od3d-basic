@@ -1,0 +1,53 @@
+defaults:
+  - default
+  - _self_
+  - optional custom@: slurm_custom
+
+ssh: slurm
+
+restart_upon_fail: True
+
+ws_name: od3d # /work/dlclarge1/sommerl-od3d
+
+branch: main
+pull: True
+pull_submodules: True
+
+setup: False
+
+path_ws: /work/dlclarge1/sommerl-od3d
+path_cuda: /usr/local/cuda-12.4
+path_datasets_raw: /work/dlclarge1/sommerl-od3d/datasets # sshfs maythux@192.168.xx.xx:/home/maythuxServ/Mounted ~/remoteDir
+path_datasets_preprocess: /work/dlclarge1/sommerl-od3d/datasets # for student: /misc/student/srinivap/datasets_preprocess
+
+
+partition:  alldlc_gpu-rtx2080 # lmb_gpu-rtx2080 # lmb_gpu-teslaP100 lmb_gpu-1080ti, lmb_gpu-rtx2080, testdlc_gpu-rtx2080, alldlc_gpu-rtx3080, alldlc_gpu-rtx2080, lmbdlc_gpu-rtx2080
+# 1. lmb_gpu-rtx2080 : usually empty, only 3 slots
+# 2. lmbdlc_gpu-rtx2080 : often pending (but eventually it will work)
+# 3. alldlc_gpu-rtx3080 : usually empty (actually not anymore), but fewer gb?
+# 4. alldlc_gpu-rtx2080 : biggest cluster
+# 5. tflmb_gpu-rtx3090: lmb gpu (debugging)
+# 6. tflmb_gpu-1080ti: lmb gpu (debugging)
+# tflmb_gpu-rtx3090
+# tflmb_gpu-1080ti
+
+# lmb_gpu-teslaP100 : error: No Kernel Image is available
+# lmbdlc_gpu-rtx2080: problem: long waiting queue,
+username: sommerl
+
+mp_start_method: "fork" # "fork" "spawn" "forkserver"
+mp_sharing_strategy: "file_system" # "file_descriptor" "file_system"
+# file_descriptor is default but doesnt work on slurm tf 
+
+node_count: 1
+gpu_count_per_node: 1
+cpu_count_per_gpu: 8
+ram_per_cpu: "5gb"
+walltime: "24:00:00" #  "24:00:00"
+renderer: pytorch3d
+
+nodes_exclude: dlc2gpu10 # ecc cudea error
+# dlc2gpu09,dlc2gpu10,dlc2gpu11,dlc2gpu01,dlc2gpu08  # shm problem, problem for ddp
+# dlc2gpu01 was suddenly having no space left on device problem
+# dlc2gpu08 sometimes had a problem after time (also dlc2gpu03, dlc2gpu13)
+# dlc2gpu12
