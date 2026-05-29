@@ -212,6 +212,7 @@ def _run_platform_setup(args):
 
     path_ws        = cfg.get("path_ws", "")
     path_cuda      = cfg.get("path_cuda", "/usr/local/cuda-12.4")
+    python_version = str(cfg.get("python_version", "3.10"))
     branch         = cfg.get("branch", "main")
     pull           = cfg.get("pull", True)
     pull_submodules = cfg.get("pull_submodules", True)
@@ -276,6 +277,7 @@ def _run_platform_setup(args):
     env_vars = {
         "PATH_WS":         path_ws,
         "PATH_CUDA":       path_cuda,
+        "PYTHON_VERSION":  python_version,
         "REPO_URL":        repo_url,   # housecorr3d HTTPS URL with token
         "REPO_NAME":       repo_name,  # derived from remote URL, e.g. HouseCorr3Dv2
         "BRANCH":          branch,
@@ -559,7 +561,44 @@ def _run_platform_runi(args):
         srun += f" --partition {partition}"
     if nodes_exclude:
         srun += f" --exclude {nodes_exclude}"
-    path_ws = cfg.get("path_ws", "")
+    import os, re, shlex
+    from omegaconf import OmegaConf
+    from pathlib import Path
+
+    path_ws    = cfg.get("path_ws", "")
+    path_cuda       = cfg.get("path_cuda", "/usr/local/cuda-12.4")
+    python_version  = str(cfg.get("python_version", "3.10"))
+    branch          = str(cfg.get("branch", "main"))
+    pull            = str(cfg.get("pull", True)).lower()
+    pull_subs       = str(cfg.get("pull_submodules", True)).lower()
+
+    cuda_tag   = "cu" + os.path.basename(path_cuda).replace("cuda-", "").replace(".", "")
+    py_tag     = "py" + python_version.replace(".", "")
+    venv_path  = f"{path_ws}/venv_{py_tag}_{cuda_tag}" if path_ws else ""
+
+    # Derive REPO_URL (with token) and REPO_NAME from the local git remote —
+    # same logic as _run_platform_setup.
+    token = OmegaConf.select(cfg, "credentials.github.token", default="") or ""
+    try:
+        submodule_root = subprocess.check_output(
+            ["git", "rev-parse", "--show-toplevel"], text=True, cwd=Path(__file__).parent,
+        ).strip()
+        superproject = subprocess.check_output(
+            ["git", "rev-parse", "--show-superproject-working-tree"], text=True, cwd=submodule_root,
+        ).strip()
+        local_repo_root = superproject if superproject else submodule_root
+        raw_remote = subprocess.check_output(
+            ["git", "remote", "get-url", "origin"], text=True, cwd=local_repo_root,
+        ).strip()
+        if raw_remote.startswith("git@"):
+            raw_remote = re.sub(r"git@github\.com:", "https://github.com/", raw_remote)
+        plain    = re.sub(r"https://[^@]+@", "https://", raw_remote)
+        repo_url  = plain.replace("https://", f"https://{token}@") if token else plain
+        repo_name = Path(re.sub(r"\.git$", "", plain.split("/")[-1])).name
+    except subprocess.CalledProcessError:
+        repo_url  = ""
+        repo_name = ""
+
     if path_ws:
         srun += f" --chdir {path_ws}"
     _proxy = "http://tfproxy.informatik.intra.uni-freiburg.de:8080"
@@ -569,8 +608,34 @@ def _run_platform_runi(args):
         f",HTTPS_PROXY={_proxy}"
         f",http_proxy={_proxy}"
         f",https_proxy={_proxy}"
+        f",PATH_WS={path_ws}"
+        f",PATH_CUDA={path_cuda}"
+        f",PYTHON_VERSION={python_version}"
+        f",REPO_URL={repo_url}"
+        f",REPO_NAME={repo_name}"
+        f",BRANCH={branch}"
+        f",PULL={pull}"
+        f",PULL_SUBMODULES={pull_subs}"
+        f",CUDA_HOME={path_cuda}"
+        f",CUDACXX={path_cuda}/bin/nvcc"
     )
-    srun += " --pty bash"
+
+    # Write a small activation script to the remote so bash --init-file can
+    # source it without wrapping srun in a bash -c subshell (which breaks the PTY).
+    init_lines = [
+        "[ -f ~/.bashrc ] && . ~/.bashrc",
+        f"export PATH={path_cuda}/bin:$PATH",
+        f"export LD_LIBRARY_PATH={path_cuda}/lib64:${{LD_LIBRARY_PATH:-}}",
+        f"export CPATH=${{CPATH:-}}:{path_cuda}/targets/x86_64-linux/include",
+        f"export LIBRARY_PATH=${{LIBRARY_PATH:-}}:{path_cuda}/targets/x86_64-linux/lib",
+    ]
+    if venv_path:
+        init_lines.append(f"[ -d {venv_path} ] && source {venv_path}/bin/activate")
+    remote_init = f"{path_ws}/.od3d_init" if path_ws else "~/.od3d_init"
+    init_script = "\n".join(init_lines)
+    subprocess.run(["ssh", ssh_host, f"cat > {remote_init}"], input=init_script, text=True, check=True)
+
+    srun += f" --pty bash --init-file {remote_init}"
 
     print(f"Opening interactive session on {ssh_host} in {path_ws or '~'}…")
     subprocess.run(["ssh", "-t", ssh_host, srun])
