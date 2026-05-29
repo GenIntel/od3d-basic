@@ -350,6 +350,21 @@ def _open_log(ssh_host: str, path_home: str, job: dict) -> None:
     subprocess.run(["ssh", "-t", ssh_host, f"less +G {log_path!r}"])
 
 
+def _kill_job(ssh_host: str, job: dict) -> None:
+    """Cancel a SLURM job via scancel after confirmation."""
+    import subprocess
+    job_id = job["JobID"]
+    print(f"\nscancel {job_id} ({job['JobName']})  [y/N] ", end="", flush=True)
+    if input().strip().lower() != "y":
+        return
+    result = subprocess.run(["ssh", ssh_host, f"scancel {job_id}"], capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"scancel failed: {result.stderr.strip()}")
+    else:
+        print(f"Job {job_id} cancelled.")
+    input("Press Enter to continue…")
+
+
 def _overview_tui(stdscr, jobs: list, ssh_host: str, title: str):
     """
     Curses TUI for job selection.
@@ -400,7 +415,7 @@ def _overview_tui(stdscr, jobs: list, ssh_host: str, title: str):
         h, w = stdscr.getmaxyx()
 
         # ── title bar ──────────────────────────────────────────────
-        bar = f" {title}  [R] refresh  [Q] quit "
+        bar = f" {title}  [R] refresh  [K] kill  [Q] quit "
         stdscr.attron(curses.color_pair(6) | curses.A_BOLD)
         stdscr.addstr(0, 0, bar[:w - 1].ljust(w - 1))
         stdscr.attroff(curses.color_pair(6) | curses.A_BOLD)
@@ -430,7 +445,7 @@ def _overview_tui(stdscr, jobs: list, ssh_host: str, title: str):
 
         # ── status bar ─────────────────────────────────────────────
         count = f"[{current + 1}/{len(jobs)}]" if jobs else "[0/0]"
-        status = f" {count}  ↑↓ navigate   Enter / L : show logs   R refresh   Q quit"
+        status = f" {count}  ↑↓ navigate   Enter / L : show logs   K kill   R refresh   Q quit"
         stdscr.attron(curses.color_pair(6))
         stdscr.addstr(h - 1, 0, status[:w - 1].ljust(w - 1))
         stdscr.attroff(curses.color_pair(6))
@@ -454,6 +469,8 @@ def _overview_tui(stdscr, jobs: list, ssh_host: str, title: str):
                     offset += 1
         elif key in (ord("\n"), ord("l"), ord("L"), curses.KEY_ENTER) and jobs:
             return ("view", jobs[current])
+        elif key in (ord("k"), ord("K")) and jobs:
+            return ("kill", jobs[current])
 
 
 def _run_platform_overview(args):
@@ -504,6 +521,9 @@ def _run_platform_overview(args):
             jobs = _fetch_jobs(ssh_host, username)
         elif action[0] == "view":
             _open_log(ssh_host, path_home, action[1])
+        elif action[0] == "kill":
+            _kill_job(ssh_host, action[1])
+            jobs = _fetch_jobs(ssh_host, username)
 
 
 def _run_platform_runi(args):
